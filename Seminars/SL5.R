@@ -1,0 +1,271 @@
+list.of.packages <- c("tseries", "vars", "urca", "fUnitRoots")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+lapply(list.of.packages, require, character.only = TRUE)
+
+## Brownian motion
+par(ask=TRUE)
+for (TT in c(20, 50, 100, 200, 500, 1000, 5000)) {
+  set.seed(11)
+  u <- -rnorm(TT)/TT
+  barplot(cumsum(u) / TT, space = 0, main = paste("T =", TT, sep = " "), xaxt = "n")
+  axis(1, at = c(0, TT), labels = c(0, 1))
+  title(xlab = "r")
+}
+
+####################################################################################
+## Case 1 (p. 487)
+# Here we simulate an AR(1) with phi=0.3 and phi=1 and estimate the parameters
+# Note that the distributions are quite different!
+par(ask=FALSE)
+set.seed(1)
+TT   <- 50            ## Sample size
+N    <- 1000          ## Replicates
+phi1 <- c(0.3, 1)     ## The AR(1) parameter
+
+rho <- matrix(0, ncol = 2, nrow = N)      ## Save the estimates
+for (j in 1:2) {
+  for (i in 1:N) {
+    e <- rnorm(TT, 0, 1)
+    y <- c()
+    y[1] <- e[1]
+    
+    for (t in 2:TT) {
+      y[t] <- phi1[j]*y[t-1] + e[t]
+    }
+    
+    rho[i, j] <- lm(y[2:TT]~y[1:(TT-1)]+0)$coefficients
+  }
+}
+
+# Subtract true value, makes comparison easier
+# Dickey-Fuller distribution is left-skewed
+d1 <- density(rho[,1]-phi1[1], bw = 0.03)
+d2 <- density(rho[,2]-phi1[2], bw = 0.03)
+plot(range(d1$x, d2$x), range(d1$y, d2$y), type = "n", xlab = "x",
+     ylab = "Density", main = "Distributions of OLS estimator in AR(1)")
+lines(d1, col = "red")
+lines(d2, col = "blue")
+legend("topright", c("phi = 0.3", "phi = 1"), col = c("red", "blue"), lty = c(1, 1))
+
+####################################################################################
+## Phillips Perron (Exercise 17.2(a))
+# Here we simulate two random walks, but in the first case
+# the error term is an MA(1) and in the second case it is
+# an AR(4). These are then ARIMA(0, 1, 1) and ARIMA(4, 1, 0)
+set.seed(1)
+TT   <- 50      ## Sample size
+N    <- 1000    ## Replicates
+
+rho <- matrix(0, ncol = 2, nrow = N)      ## Save the estimates
+
+# First column of theta contains MA parameters, second AR
+# Note that it is the error term which will be AR/MA!
+theta <- matrix(c(0.3, 0, 0, 0, 0.3, 0.2, 0.1, 0.05), ncol = 2)
+for (j in 1:2) {
+  for (i in 1:N) {
+    u <- rnorm(TT)
+    e[1:4] <- u[1:4]
+    for (t in 5:TT) {
+      if (j == 1) {
+        e[t] <- t(theta[,1]) %*% u[(t-4):(t-1)]+u[t] # If j==1, MA
+      } else {
+        e[t] <- t(theta[,2]) %*% e[(t-4):(t-1)]+u[t] # If j!=1, AR
+      }
+    }
+    y <- c()
+    y[1] <- e[1]
+    
+    for (t in 2:TT) {
+      y[t] <- y[t-1] + e[t]
+    }
+    
+    rho[i, j] <- lm(y[2:TT]~y[1:(TT-1)]+0)$coefficients
+  }
+}
+
+d3 <- density(rho[,1]-1, bw = 0.03)
+d4 <- density(rho[,2]-1, bw = 0.03)
+plot(range(d3$x, d4$x), range(d3$y, d4$y), type = "n", xlab = "x",
+     ylab = "Density")
+lines(d3, col = "red")
+lines(d4, col = "blue")
+lines(d2, col = "black")
+legend("topleft", c("error ~ MA(1)", "error ~ AR(4)", "error ~ WN"), col = c("red", "blue", "black"), lty = c(1, 1, 1))
+
+####################################################################################
+## ADF Tests
+
+library(urca)
+library(fUnitRoots)
+library(tseries)
+
+# adfTest is in fUnitRoots
+# can test using no constant, constant or constant and trend
+# Case 1, Case 2 and Case 4
+# Default lag is 1
+adfTest(y, type = "nc")
+adfTest(y, type = "c")
+adfTest(y, type = "ct")
+
+# adf.test is in tseries
+# Allows for testing explosiveness as well
+# only includes Case 4
+# Lag is set by default to the integer part of (T-1)^(1/3)
+adf.test(y, k = 1)
+
+# ur.df is in urca
+# can test using no constant, constant (drift) and trend
+# Case 1, Case 2 and Case 4
+# Lags can be chosen by AIC or BIC if desired
+ur.df(y, type = "none", lags = 1)
+ur.df(y, type = "drift", lags = 1)
+ur.df(y, type = "trend", lags = 1)
+
+# Compare, with trend
+adfTest(y, type = "ct")
+adf.test(y, k = 1)
+ur.df(y, type = "trend", lags = 1)
+
+# Compare, with intercept
+ur.df(y, type = "drift", lags = 1)
+adfTest(y, type = "c")
+
+# Compare, no constants
+ur.df(y, type = "none", lags = 1)
+adfTest(y, type = "nc")
+
+
+####################################################################################
+# ADF test simulations
+# The general model is
+# y_t = y0 + t*c_alpha + c_delta*t*(t-1)/2+e_t
+# In R, we can write this as
+# y = y0 + c_alpha * (1:TT) + c_delta * (1:TT)*(0:(TT-1))/2 + cumsum(rnorm(TT))
+nRep <- 1000
+TT <- 100
+c_alpha <- 1
+c_delta <- 0
+y0 <- 0
+
+## SIMULATION 1
+# Simulate model with drift and unit root, test using Case 4
+rejection <- rep(NA, nRep)
+for (i in 1:nRep) {
+  y <- (1:TT) * c_alpha + cumsum(rnorm(TT))
+  rejection[i] <- ifelse(attributes(adfTest(y, type = "ct"))$test$p.value < 0.05, 1, 0)
+}
+ts.plot(y)
+mean(rejection) # Seems to do OK!
+
+## SIMULATION 2
+# Simulate with no drift, but test vs trend
+rejection2 <- rep(NA, nRep)
+for (i in 1:nRep) {
+  y <- cumsum(rnorm(TT))
+  rejection2[i] <- ifelse(attributes(adfTest(y, type = "ct"))$test$p.value < 0.05, 1, 0)
+}
+ts.plot(y)
+mean(rejection2) # Still seems to do OK (but power should be lower)
+
+## SIMULATION 3
+# Simulate with no unit root (but trend) for various choices of rho, the AR parameter
+# Test using Case 4 again
+rho <- seq(0.5, 0.9, 0.1)
+rejection3 <- matrix(0, nRep, length(rho))
+c_alpha3 <- 1
+c_delta2 <- 1
+y <- rep(0, TT)
+for (i in 1:nRep) {
+  for (j in 1:length(rho)) {
+    y <- arima.sim(n = TT, list(ar = rho[j]), sd = 1) + c_alpha3 + c_delta2 * (1:TT)
+    rejection3[i, j] <- ifelse(attributes(adfTest(y, type = "ct"))$test$p.value < 0.05, 1, 0)
+  }
+}
+ts.plot(y)
+plot(rho, colMeans(rejection3), type = "b", ylab = "Rejection rates (power)")
+
+########
+# Simulate and compare distributions with and without intercept (but unit root)
+# This is case 2, but note that we only change alpha!
+
+# Here alpha is not 0, which is assumed when deriving the limit distribution
+c_alpha4 <- 1
+nullFalse <- rep(0, nRep)
+for (i in 1:nRep) {
+  y <- (1:TT) * c_alpha4 + cumsum(rnorm(TT)) 
+  testres <- adfTest(y, type = "c")
+  nullFalse[i] <- testres@test$statistic
+}
+ts.plot(y)
+
+# Here alpha is 0
+c_alpha4 <- 0
+nullTrue <- rep(0, nRep)
+for (i in 1:nRep) {
+  y <- (1:TT) * c_alpha4 + cumsum(rnorm(TT)) 
+  testres <- adfTest(y, type = "c")
+  nullTrue[i] <- testres@test$statistic
+}
+ts.plot(y)
+
+# Plot
+plot(density(nullTrue, bw = 0.2), main = "Distributions of the statistic, rho = 1")
+lines(density(nullFalse, bw = 0.2), col = "red")
+legend("topright", legend = c("alpha = 0", "alpha = 1"), col = c("black", "red"), lty = c(1, 1))
+
+# Add a vertical line where the critical value (0.05 level) is
+abline(v = -2.89)
+
+# we reject the null, but not because there is a unit root!
+mean(nullFalse < -2.89)
+mean(nullTrue < -2.89)
+
+
+####################################################################################
+## Cointegration (package urca)
+
+data(Canada)
+plot.ts(Canada, plot.type = "multiple")
+
+# All are non-stationary
+adfTest(Canada[,1], lags = 8, type = "ct")  # Case 4 -- CANNOT REJECT
+
+adfTest(Canada[,2], lags = 8, type = "ct")  # Case 4 -- CANNOT REJECT
+adfTest(Canada[,2], lags = 8, type = "c")   # Case 2 -- CANNOT REJECT
+
+adfTest(Canada[,3], lags = 8, type = "ct")  # Case 4 -- CANNOT REJECT
+
+adfTest(Canada[,4], lags = 8, type = "c")   # Case 2 -- CANNOT REJECT
+
+
+# Type is which test to use, trace or maximum eigenvalue
+# K is lag length (p in Hamilton)
+# spec relates to a choice of model formulation, transitory is used in Hamilton,
+# but conclusions will not differ
+Canada.jo <- ca.jo(Canada, type = "trace", K = 2, spec = "transitory", ecdet = "none")
+summary(Canada.jo)
+
+# Test that y1-y2+y3 is a cointegrating relation
+# H0: B1=H*phi, where phi is free
+# This is what Hamilton uses as well, but he uses D instead of H and A for both
+# B1 (when you have no restrictions) and for phi (see . p 648)
+B1 <- matrix(c(1, -1, 1, 0), nrow = 4)
+test <- blrtest(z = Canada.jo, H=B1, r=1)
+summary(test)
+
+
+####################################################
+## Simulate cointegration: X1-X2 is stationary
+TT <- 100
+X1 <- cumsum(rnorm(TT))
+X2 <- X1 + rnorm(TT, 0, 1)
+ts.plot(cbind(X1, X2), lty = 1:2)
+
+# Difference is stationary
+ts.plot(X1-X2)
+
+# Plot X1 vs X2, the line Beta' X_t=0 <==> X_1=X_2 is the stationary relation around which the process will be
+plot(X1, X2, type = "l")
+abline(a = 0, b = 1, col = "red", lwd = 2)
+
